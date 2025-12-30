@@ -53,4 +53,27 @@ end, {
   desc = 'Show module hierarchy',
 })
 
+vim.api.nvim_create_user_command('SVElaborate', function(opts)
+  local parser = require('neosystemverilog.parser')
+  local file = opts.args ~= '' and opts.args or nil
+  local result = parser.elaborate(file)
+  parser.show_elaboration_results(result)
+end, {
+  nargs = '?',
+  complete = 'file',
+  desc = 'Elaborate SystemVerilog design hierarchy',
+})
+
+vim.api.nvim_create_user_command('SVElaborateQuiet', function(opts)
+  local parser = require('neosystemverilog.parser')
+  local file = opts.args ~= '' and opts.args or nil
+  local result = parser.elaborate(file)
+  
+  print(string.format('Elaborated: %d files, %d modules', 
+    #result.files, vim.tbl_count(result.modules)))
+end, {
+  nargs = '?',
+  complete = 'file',
+  desc = 'Elaborate SystemVerilog design (quiet mode)',
+})
 
