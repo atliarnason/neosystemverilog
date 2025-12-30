@@ -100,7 +100,7 @@ M.defaults = {
   auto_update_index = true,
   
   -- Logging
-  log_level = vim.log.levels.WARN,
+  log_level = vim.log.levels.INFO,
 }
 
 ---Current configuration

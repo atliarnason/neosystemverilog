@@ -77,3 +77,42 @@ end, {
   desc = 'Elaborate SystemVerilog design (quiet mode)',
 })
 
+
+vim.api.nvim_create_user_command('SVCacheStats', function()
+  local parser = require('neosystemverilog.parser')
+  local cache = parser.cache
+  
+  print('=== NeoSystemVerilog Cache Statistics ===')
+  print(string.format('Modules: %d', vim.tbl_count(cache.modules)))
+  for k, v in pairs(cache.modules) do
+    print(string.format("\t%s in file: %s", k, v.file))
+    if table.getn(v.ports) ~= 0 then
+      for port in v.ports do
+        print(string.format("\t\t%s",  port.name))
+      end
+    end
+  end
+  print(string.format('Interfaces: %d', vim.tbl_count(cache.interfaces)))
+  print(string.format('Structs: %d', vim.tbl_count(cache.structs)))
+  print(string.format('Typedefs: %d', vim.tbl_count(cache.typedefs)))
+  print(string.format('Files indexed: %d', vim.tbl_count(cache.files)))
+end, {
+  desc = 'Show SystemVerilog index cache statistics',
+})
+
+vim.api.nvim_create_user_command('SVCacheClear', function()
+  local parser = require('neosystemverilog.parser')
+  parser.cache = {
+    modules = {},
+    interfaces = {},
+    structs = {},
+    typedefs = {},
+    files = {},
+  }
+  parser._save_cache_to_disk()
+  print('Cache cleared')
+end, {
+  desc = 'Clear SystemVerilog index cache',
+})
+
+

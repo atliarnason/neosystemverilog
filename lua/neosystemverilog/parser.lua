@@ -193,6 +193,7 @@ function M.update_index()
     typedefs = {},
     files = {},
   }
+end
 
 
 
@@ -359,7 +360,7 @@ function M.parse_module_definition(file, module_name)
         (list_of_port_declarations)? @ports))
   ]]
   
-  local ok, query = pcall(vim.treesitter.query.parse, 'verilog', query_str)
+  local ok, query = pcall(vim.treesitter.query.parse, 'systemverilog', query_str)
   if not ok then
     return M._parse_module_regex(content, file, module_name)
   end
@@ -469,12 +470,12 @@ function M._parse_module_regex(content, file, module_name)
         local port_line = lines[j]
         
         -- Match: input/output/inout [type] name
-        local direction, port_name = port_line:match('^%s*(%w+)%s+%w*%s*(%w+)')
+        local direction, type, port_name = port_line:match('^%s*(%w+)%s+(%w*)%s*(%w+)')
         if direction and (direction == 'input' or direction == 'output' or direction == 'inout') then
           table.insert(ports, {
             name = port_name,
             direction = direction,
-            type = 'logic',
+            type = type,
           })
         end
         
@@ -678,5 +679,551 @@ function M.show_elaboration_results(elab_result)
   vim.api.nvim_buf_set_name(buf, 'Elaboration Results')
 end
 
--- Keep all your existing functions (check_syntax, update_index, etc.)
+---Update index for a single file
+---@param file string File path
+function M.update_file_index(file)
+  if not utils.file_exists(file) then
+    utils.debug('File does not exist, skipping index: ' .. file)
+    return
+  end
+  
+  local cfg = config.get()
+  
+  -- Check file size
+  local stat = vim.loop.fs_stat(file)
+  if stat and stat.size > cfg.index.max_file_size then
+    utils.warn(string.format('File too large to index (%d bytes): %s', stat.size, file))
+    return
+  end
+  
+  -- Check if file was recently modified
+  if M.cache.files[file] then
+    local cached = M.cache.files[file]
+    if stat and cached.last_modified == stat.mtime.sec then
+      utils.debug('File unchanged, skipping index: ' .. file)
+      return
+    end
+  end
+  
+  utils.debug('Indexing file: ' .. file)
+  
+  -- Parse the file
+  local file_data = M._parse_file(file)
+  
+  if not file_data then
+    utils.debug('Failed to parse file: ' .. file)
+    return
+  end
+  
+  -- Update cache with parsed data
+  M.cache.files[file] = {
+    modules = file_data.modules or {},
+    interfaces = file_data.interfaces or {},
+    structs = file_data.structs or {},
+    typedefs = file_data.typedefs or {},
+    last_modified = stat and stat.mtime.sec or 0,
+  }
+  
+  -- Update global indices
+  for _, module in ipairs(file_data.modules or {}) do
+    M.cache.modules[module.name] = module
+  end
+  
+  for _, interface in ipairs(file_data.interfaces or {}) do
+    M.cache.interfaces[interface.name] = interface
+  end
+  
+  for _, struct in ipairs(file_data.structs or {}) do
+    M.cache.structs[struct.name] = struct
+  end
+  
+  for _, typedef in ipairs(file_data.typedefs or {}) do
+    M.cache.typedefs[typedef.name] = typedef
+  end
+  
+  utils.debug(string.format('Indexed: %d modules, %d interfaces, %d structs, %d typedefs',
+    #(file_data.modules or {}),
+    #(file_data.interfaces or {}),
+    #(file_data.structs or {}),
+    #(file_data.typedefs or {})))
+end
+
+---Parse a SystemVerilog file and extract all definitions
+---@param file string File path
+---@return table|nil Parsed data {modules, interfaces, structs, typedefs}
+function M._parse_file(file)
+  local content = utils.read_file(file)
+  if not content then
+    return nil
+  end
+  
+  -- Try tree-sitter first
+  local has_ts = pcall(require, 'nvim-treesitter.parsers')
+  if has_ts then
+    local ok, result = pcall(M._parse_file_treesitter, file, content)
+    if ok and result then
+      return result
+    end
+    utils.debug('Tree-sitter parsing failed, falling back to regex')
+  end
+  
+  -- Fallback to regex parsing
+  return M._parse_file_regex(file, content)
+end
+
+---Parse file using tree-sitter
+---@param file string
+---@param content string
+---@return table Parsed data
+function M._parse_file_treesitter(file, content)
+  local parser = vim.treesitter.get_string_parser(content, 'systemverilog')
+  local tree = parser:parse()[1]
+  local root = tree:root()
+  
+  local result = {
+    modules = {},
+    interfaces = {},
+    structs = {},
+    typedefs = {},
+  }
+  
+  -- Parse modules
+  local module_query = vim.treesitter.query.parse('systemverilog', [[
+    (module_declaration
+      (module_header
+        name: (simple_identifier) @module.name))
+  ]])
+
+  
+  for id, node in module_query:iter_captures(root, content, 0, -1) do
+    local capture = module_query.captures[id]
+    if capture == 'module.name' then
+      local module_name = get_node_text(node)
+      local module_node = node:parent():parent()
+      local start_row = node:range()
+      
+      local ports = M._extract_ports_from_node(module_node, content)
+      local parameters = M._extract_parameters_from_node(module_node, content)
+      
+      table.insert(result.modules, {
+        name = module_name,
+        file = file,
+        line = start_row + 1,
+        ports = ports,
+        parameters = parameters,
+      })
+    end
+  end
+  
+  -- Parse interfaces
+  local interface_query = vim.treesitter.query.parse('systemverilog', [[
+    (interface_declaration
+      name: (simple_identifier) @interface.name)
+  ]])
+  
+  for id, node in interface_query:iter_captures(root, content, 0, -1) do
+    local capture = interface_query.captures[id]
+    if capture == 'interface.name' then
+      local interface_name = get_node_text(node)
+      local interface_node = node:parent()
+      local start_row = node:range()
+      
+      local members = M._extract_interface_members(interface_node, content)
+      
+      table.insert(result.interfaces, {
+        name = interface_name,
+        file = file,
+        line = start_row + 1,
+        members = members,
+      })
+    end
+  end
+  
+  -- Parse typedefs (structs, unions, enums)
+  local typedef_query = vim.treesitter.query.parse('systemverilog', [[
+    (type_declaration
+      (data_type) @type
+      (type_identifier) @name)
+  ]])
+  
+  for id, node in typedef_query:iter_captures(root, content, 0, -1) do
+    local capture = typedef_query.captures[id]
+    if capture == 'name' then
+      local typedef_name = get_node_text(node)
+      local start_row = node:range()
+      
+      -- Try to extract struct/union members
+      local type_node = node:prev_sibling()
+      local members = {}
+      
+      if type_node then
+        members = M._extract_struct_members(type_node, content)
+      end
+      
+      if #members > 0 then
+        table.insert(result.structs, {
+          name = typedef_name,
+          file = file,
+          line = start_row + 1,
+          members = members,
+        })
+      else
+        table.insert(result.typedefs, {
+          name = typedef_name,
+          file = file,
+          line = start_row + 1,
+          type = type_node and get_node_text(type_node) or 'unknown',
+        })
+      end
+    end
+  end
+  
+  return result
+end
+
+---Extract interface members from interface node
+---@param interface_node table
+---@param content string
+---@return table[] members
+function M._extract_interface_members(interface_node, content)
+  local members = {}
+  
+  for child in interface_node:iter_children() do
+    local type = child:type()
+    
+    -- Look for data declarations (signals, variables)
+    if type:match('data_declaration') or type:match('variable_declaration') then
+      local member_text = get_node_text(child)
+      if member_text then
+        -- Parse: logic/reg/wire [size] name
+        local var_type, var_name = member_text:match('(%w+)%s+[%w%[%]:%s]*%s*(%w+)')
+        if var_name then
+          table.insert(members, {
+            name = var_name,
+            type = var_type or 'logic',
+          })
+        end
+      end
+    end
+    
+    -- Look for modport declarations
+    if type:match('modport') then
+      local modport_text = get_node_text(child)
+      if modport_text then
+        local modport_name = modport_text:match('modport%s+(%w+)')
+        if modport_name then
+          table.insert(members, {
+            name = modport_name,
+            type = 'modport',
+          })
+        end
+      end
+    end
+  end
+  
+  return members
+end
+
+---Extract struct members from type node
+---@param type_node table
+---@param content string
+---@return table[] members
+function M._extract_struct_members(type_node, content)
+  local members = {}
+  
+  for child in type_node:iter_children() do
+    local type = child:type()
+    
+    if type:match('struct_union_member') or type:match('data_type') then
+      local member_text = get_node_text(child)
+      if member_text then
+        -- Parse: type name; or type [size] name;
+        local member_type, member_name = member_text:match('(%w+)%s+[%w%[%]:%s]*%s*(%w+)')
+        if member_name then
+          table.insert(members, {
+            name = member_name,
+            type = member_type or 'logic',
+          })
+        end
+      end
+    end
+  end
+  
+  return members
+end
+
+---Parse file using regex (fallback)
+---@param file string
+---@param content string
+---@return table Parsed data
+function M._parse_file_regex(file, content)
+  local lines = vim.split(content, '\n')
+  
+  local result = {
+    modules = {},
+    interfaces = {},
+    structs = {},
+    typedefs = {},
+  }
+  
+  local i = 1
+  while i <= #lines do
+    local line = lines[i]
+    
+    -- Parse module declarations
+    local module_name = line:match('^%s*module%s+([%w_]+)')
+    if module_name then
+      local ports = {}
+      local parameters = {}
+      local j = i + 1
+      
+      -- Extract ports and parameters until endmodule
+      while j <= #lines and not lines[j]:match('endmodule') do
+        local port_line = lines[j]
+        
+        -- Match port: input/output/inout [type] name
+        local direction, port_name = port_line:match('^%s*(input|output|inout)%s+[%w%[%]:%s]*%s*([%w_]+)')
+        if direction and port_name then
+          table.insert(ports, {
+            name = port_name,
+            direction = direction,
+            type = 'logic',
+          })
+        end
+        
+        -- Match parameter
+        local param_name, param_value = port_line:match('^%s*parameter%s+[%w%s]*%s*([%w_]+)%s*=%s*(.+)')
+        if param_name then
+          table.insert(parameters, {
+            name = param_name,
+            value = param_value and vim.trim(param_value:gsub('[,;]', '')) or nil,
+          })
+        end
+        
+        j = j + 1
+        if j > i + 200 then break end -- Safety limit
+      end
+      
+      table.insert(result.modules, {
+        name = module_name,
+        file = file,
+        line = i,
+        ports = ports,
+        parameters = parameters,
+      })
+    end
+    
+    -- Parse interface declarations
+    local interface_name = line:match('^%s*interface%s+([%w_]+)')
+    if interface_name then
+      local members = {}
+      local j = i + 1
+      
+      while j <= #lines and not lines[j]:match('endinterface') do
+        local member_line = lines[j]
+        
+        -- Match signal: logic/wire/reg name
+        local member_type, member_name = member_line:match('^%s*(%w+)%s+[%w%[%]:%s]*%s*([%w_]+)')
+        if member_type and member_name then
+          local valid_types = {'logic', 'wire', 'reg', 'bit', 'byte'}
+          if vim.tbl_contains(valid_types, member_type) then
+            table.insert(members, {
+              name = member_name,
+              type = member_type,
+            })
+          end
+        end
+        
+        -- Match modport
+        local modport_name = member_line:match('^%s*modport%s+([%w_]+)')
+        if modport_name then
+          table.insert(members, {
+            name = modport_name,
+            type = 'modport',
+          })
+        end
+        
+        j = j + 1
+        if j > i + 200 then break end
+      end
+      
+      table.insert(result.interfaces, {
+        name = interface_name,
+        file = file,
+        line = i,
+        members = members,
+      })
+    end
+    
+    -- Parse typedef struct/union
+    local typedef_struct = line:match('^%s*typedef%s+struct')
+    local typedef_union = line:match('^%s*typedef%s+union')
+    
+    if typedef_struct or typedef_union then
+      local members = {}
+      local j = i
+      local struct_name = nil
+      
+      -- Find closing brace and typedef name
+      while j <= #lines do
+        local struct_line = lines[j]
+        
+        -- Extract member: type name;
+        if not struct_line:match('typedef') and not struct_line:match('[{}]') then
+          local member_type, member_name = struct_line:match('^%s*(%w+)%s+[%w%[%]:%s]*%s*([%w_]+)')
+          if member_type and member_name then
+            table.insert(members, {
+              name = member_name,
+              type = member_type,
+            })
+          end
+        end
+        
+        -- Find typedef name after closing brace
+        struct_name = struct_line:match('}%s*([%w_]+)')
+        if struct_name then
+          break
+        end
+        
+        j = j + 1
+        if j > i + 100 then break end
+      end
+      
+      if struct_name and #members > 0 then
+        table.insert(result.structs, {
+          name = struct_name,
+          file = file,
+          line = i,
+          members = members,
+        })
+      end
+    end
+    
+    -- Parse simple typedefs (non-struct)
+    local simple_typedef = line:match('^%s*typedef%s+([^;]+);')
+    if simple_typedef and not typedef_struct and not typedef_union then
+      local base_type, new_name = simple_typedef:match('(%S+)%s+([%w_]+)%s*$')
+      if new_name then
+        table.insert(result.typedefs, {
+          name = new_name,
+          file = file,
+          line = i,
+          type = base_type or 'unknown',
+        })
+      end
+    end
+    
+    i = i + 1
+  end
+  
+  return result
+end
+
+---Update project-wide index (complete implementation)
+function M.update_index()
+  local cfg = config.get()
+  local root = utils.get_project_root()
+  
+  utils.info('Updating project index from: ' .. root)
+  
+  -- Find all SystemVerilog files
+  local files = utils.find_files(
+    cfg.index.file_patterns,
+    root,
+    cfg.index.exclude_patterns
+  )
+  
+  utils.debug(string.format('Found %d files to index', #files))
+  
+  -- Clear old cache
+  M.cache = {
+    modules = {},
+    interfaces = {},
+    structs = {},
+    typedefs = {},
+    files = {},
+  }
+  
+  -- Index each file
+  local indexed_count = 0
+  local start_time = vim.loop.hrtime()
+  
+  for _, file in ipairs(files) do
+    M.update_file_index(file)
+    indexed_count = indexed_count + 1
+  end
+  
+  local elapsed = (vim.loop.hrtime() - start_time) / 1e9
+  
+  -- Save cache to disk
+  M._save_cache_to_disk()
+  
+  utils.info(string.format(
+    'Indexed %d files in %.2fs: %d modules, %d interfaces, %d structs, %d typedefs',
+    indexed_count,
+    elapsed,
+    vim.tbl_count(M.cache.modules),
+    vim.tbl_count(M.cache.interfaces),
+    vim.tbl_count(M.cache.structs),
+    vim.tbl_count(M.cache.typedefs)
+  ))
+end
+
+---Save cache to disk
+function M._save_cache_to_disk()
+  local cfg = config.get()
+  local cache_file = cfg.index.cache_dir .. '/index.json'
+  
+  local ok, json = pcall(vim.fn.json_encode, M.cache)
+  if not ok then
+    utils.warn('Failed to encode cache to JSON')
+    return
+  end
+  
+  local file = io.open(cache_file, 'w')
+  if file then
+    file:write(json)
+    file:close()
+    utils.debug('Cache saved to: ' .. cache_file)
+  else
+    utils.warn('Failed to write cache file: ' .. cache_file)
+  end
+end
+
+---Load cache from disk
+function M._load_cache_from_disk()
+  local cfg = config.get()
+  local cache_file = cfg.index.cache_dir .. '/index.json'
+  
+  if not utils.file_exists(cache_file) then
+    utils.debug('No cache file found')
+    return false
+  end
+  
+  local file = io.open(cache_file, 'r')
+  if not file then
+    return false
+  end
+  
+  local content = file:read('*all')
+  file:close()
+  
+  local ok, cache = pcall(vim.fn.json_decode, content)
+  if ok and cache then
+    M.cache = cache
+    utils.debug(string.format('Loaded cache: %d modules, %d interfaces, %d structs',
+      vim.tbl_count(M.cache.modules or {}),
+      vim.tbl_count(M.cache.interfaces or {}),
+      vim.tbl_count(M.cache.structs or {})))
+    return true
+  end
+  
+  utils.warn('Failed to load cache from disk')
+  return false
+end
+
+-- Load cache on module load
+M._load_cache_from_disk()
+
+return M
 
