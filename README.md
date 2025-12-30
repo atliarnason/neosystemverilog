@@ -1,2 +1,11 @@
-# neosystemverilog
-SystemVerilog neovim plugin to ease development
+```
+   _  __________  ____         __          _   __        _ __         
+  / |/ / __/ __ \/ __/_ _____ / /____ __ _| | / /__ ____(_) /__  ___ _
+ /    / _// /_/ /\ \/ // (_-</ __/ -_)  ' \ |/ / -_) __/ / / _ \/ _ `/
+/_/|_/___/\____/___/\_, /___/\__/\__/_/_/_/___/\__/_/ /_/_/\___/\_, / 
+                   /___/                                       /___/  
+```
+
+Neovim plugin for modern SystemVerilog development. 
+
+
