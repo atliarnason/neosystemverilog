@@ -152,5 +152,58 @@ function M.deepcopy(tbl)
   return vim.deepcopy(tbl)
 end
 
+
+
+---Show message in floating window
+---@param lines string[]
+---@param title string|nil
+function M.show_float(lines, title)
+  title = title or 'NeoSystemVerilog'
+  
+  -- Create buffer
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, lines)
+  
+  -- Calculate window size
+  local width = 80
+  local height = math.min(#lines + 2, 30)
+  
+  -- Center window
+  local row = math.floor((vim.o.lines - height) / 2)
+  local col = math.floor((vim.o.columns - width) / 2)
+  
+  -- Open floating window
+  local win = vim.api.nvim_open_win(buf, true, {
+    relative = 'editor',
+    width = width,
+    height = height,
+    row = row,
+    col = col,
+    style = 'minimal',
+    border = 'rounded',
+    title = title,
+    title_pos = 'center',
+  })
+  
+  -- Set options
+  vim.api.nvim_buf_set_option(buf, 'modifiable', false)
+  vim.api.nvim_win_set_option(win, 'wrap', false)
+  
+  -- Close on <Esc> or q
+  vim.api.nvim_buf_set_keymap(buf, 'n', '<Esc>', ':close<CR>', 
+    { noremap = true, silent = true })
+  vim.api.nvim_buf_set_keymap(buf, 'n', 'q', ':close<CR>', 
+    { noremap = true, silent = true })
+end
+
+---Show debug info in float
+---@param data any
+---@param title string|nil
+function M.debug_float(data, title)
+  local lines = vim.split(vim.inspect(data), '\n')
+  M.show_float(lines, title or 'Debug Info')
+end
+
+
 return M
 

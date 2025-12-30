@@ -3,7 +3,6 @@
 -- author: aha
 -- #######################################
 
--- lua/neosystemverilog/parser.lua
 local M = {}
 
 local ts_utils = require('nvim-treesitter.ts_utils')
@@ -361,6 +360,10 @@ function M.parse_module_definition(file, module_name)
   ]]
   
   local ok, query = pcall(vim.treesitter.query.parse, 'systemverilog', query_str)
+  require('neosystemverilog.utils').show_float({
+    'Parsing module!',
+  }, 'Parse Summary')
+
   if not ok then
     return M._parse_module_regex(content, file, module_name)
   end
@@ -514,6 +517,7 @@ function M.elaborate(start_file)
     utils.error('File does not exist: ' .. start_file)
     return { files = {}, modules = {}, hierarchy = {}, includes = {} }
   end
+
   
   utils.info('Elaborating from: ' .. start_file)
   

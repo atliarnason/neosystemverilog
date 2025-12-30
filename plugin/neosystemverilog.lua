@@ -15,6 +15,7 @@ vim.g.loaded_systemverilog = 1
 ------------------------------------------------------------------------
 
 -- instantiate
+-- Module instantiation commands
 vim.api.nvim_create_user_command('SVInstantiate', function(opts)
   require('neosystemverilog.instantiate').instantiate_module(opts.args)
 end, {
@@ -23,6 +24,35 @@ end, {
   complete = function()
     return require('neosystemverilog.instantiate').get_module_list()
   end,
+})
+
+vim.api.nvim_create_user_command('SVInstantiateUnderCursor', function()
+  require('neosystemverilog.instantiate').instantiate_under_cursor()
+end, {
+  desc = 'Instantiate module under cursor',
+})
+
+vim.api.nvim_create_user_command('SVModuleInfo', function(opts)
+  local module_name = opts.args ~= '' and opts.args or 
+                      require('neosystemverilog.utils').get_word_under_cursor()
+  require('neosystemverilog.instantiate').show_module_info(module_name)
+end, {
+  nargs = '?',
+  complete = function()
+    return require('neosystemverilog.instantiate').get_module_list()
+  end,
+  desc = 'Show module information',
+})
+
+vim.api.nvim_create_user_command('SVGenerateTestbench', function(opts)
+  require('neosystemverilog.instantiate').generate_testbench(opts.args)
+end, {
+  nargs = 1,
+  complete = function()
+    return require('neosystemverilog.instantiate').get_module_list()
+  end,
+  desc = 'Generate testbench for module',
+})
 })
 
 -- goto definition
@@ -54,6 +84,9 @@ end, {
 })
 
 vim.api.nvim_create_user_command('SVElaborate', function(opts)
+  require('neosystemverilog.utils').show_float({
+    'Parsing starting!',
+  }, 'Parse Summary')
   local parser = require('neosystemverilog.parser')
   local file = opts.args ~= '' and opts.args or nil
   local result = parser.elaborate(file)
