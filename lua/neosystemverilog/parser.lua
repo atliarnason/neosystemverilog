@@ -192,6 +192,7 @@ function M.update_index()
     structs = {},
     typedefs = {},
     files = {},
+  }
 
 
 
